@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "extensions": {
+    ".py": "vscode",
+    ".js": "vscode",
+    ".ts": "vscode",
+    ".md": "vscode",
+    ".json": "vscode",
+    ".csv": "excel",
+    ".xlsx": "excel",
+    ".xls": "excel"
+  },
+  "scenes": [
+    {
+      "name": "main",
+      "template": "left-right",
+      "monitor": "primary",
+      "items": [
+        {
+          "file": "main.py",
+          "rect": [0,0,0.5,1],
+          "state": "normal"
+        },
+        {
+          "file": "data/result.csv",
+          "rect": [0.5,0,1,1],
+          "state": "normal"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>Setpiece</RootNamespace>
+    <AssemblyName>Setpiece.Core</AssemblyName>
+    <Version>0.1.0</Version>
+    <Product>Setpiece</Product>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="setpiece" />
+    <InternalsVisibleTo Include="Setpiece.App" />
+  </ItemGroup>
+
+</Project>

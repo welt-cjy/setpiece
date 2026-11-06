@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>setpiece</AssemblyName>
+    <RootNamespace>Setpiece</RootNamespace>
+    <Version>0.1.0</Version>
+    <Product>Setpiece</Product>
+    <AssemblyTitle>Setpiece CLI</AssemblyTitle>
+    <Description>Project-scoped window scenes for Windows</Description>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Setpiece.Core\Setpiece.Core.csproj" />
+  </ItemGroup>
+
+</Project>
