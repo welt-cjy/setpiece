@@ -1,0 +1,176 @@
+<Window x:Class="Setpiece.App.NewWorkspaceWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="新建工作区"
+        AutomationProperties.AutomationId="NewWorkspaceWindow"
+        Height="660" Width="780"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Background="#1B1B1F" Foreground="#E8E8EA"
+        FontFamily="Segoe UI" FontSize="13">
+
+    <Window.Resources>
+        <Style TargetType="Button">
+            <Setter Property="Background" Value="#34343A" />
+            <Setter Property="Foreground" Value="#E8E8EA" />
+            <Setter Property="Padding" Value="14,7" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#45454C" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="Primary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="#2D6CDF" />
+        </Style>
+
+        <Style TargetType="TextBox">
+            <Setter Property="Background" Value="#26262B" />
+            <Setter Property="Foreground" Value="#E8E8EA" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderBrush" Value="#3A3A42" />
+            <Setter Property="Padding" Value="7,5" />
+        </Style>
+
+        <Style TargetType="TreeView">
+            <Setter Property="Background" Value="#1F1F24" />
+            <Setter Property="BorderBrush" Value="#3A3A42" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="#E8E8EA" />
+        </Style>
+
+        <Style TargetType="TreeViewItem">
+            <Setter Property="Foreground" Value="#E8E8EA" />
+            <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+            <Setter Property="AutomationProperties.Name" Value="{Binding Name}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TreeViewItem">
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="16" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <ToggleButton x:Name="Expander" Grid.Column="0" Focusable="False"
+                                              ClickMode="Press"
+                                              IsChecked="{Binding IsExpanded, Mode=TwoWay,
+                                                          RelativeSource={RelativeSource TemplatedParent}}">
+                                    <ToggleButton.Template>
+                                        <ControlTemplate TargetType="ToggleButton">
+                                            <Border Background="Transparent" Width="16" Height="16">
+                                                <Path x:Name="Arrow" Data="M 0 0 L 4 5 L 0 10 Z"
+                                                      Fill="#9A9AA3" HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsChecked" Value="True">
+                                                    <Setter TargetName="Arrow" Property="Data"
+                                                            Value="M 0 0 L 10 0 L 5 5 Z" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </ToggleButton.Template>
+                                </ToggleButton>
+
+                                <Border x:Name="Bd" Grid.Column="1" Background="{TemplateBinding Background}"
+                                        Padding="2,1">
+                                    <ContentPresenter ContentSource="Header" />
+                                </Border>
+                            </Grid>
+
+                            <ItemsPresenter x:Name="ItemsHost" Margin="16,0,0,0" />
+                        </StackPanel>
+
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsExpanded" Value="False">
+                                <Setter TargetName="ItemsHost" Property="Visibility" Value="Collapsed" />
+                            </Trigger>
+                            <DataTrigger Binding="{Binding IsFolder}" Value="False">
+                                <Setter TargetName="Expander" Property="Visibility" Value="Hidden" />
+                            </DataTrigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#2D6CDF" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="TextBlock" x:Key="Hint">
+            <Setter Property="Foreground" Value="#9A9AA3" />
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Margin="0,0,0,12">
+            <TextBlock x:Name="HeaderText" Text="新建工作区" FontSize="17" FontWeight="SemiBold" />
+            <TextBlock x:Name="PathText" Style="{StaticResource Hint}" Margin="0,4,0,0"
+                       TextTrimming="CharacterEllipsis" />
+            <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0" TextWrapping="Wrap"
+                       Text="展开目录勾选要放进场景的文件。场景就是一个布局单元，之后可以在编辑器里继续调整。" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
+            <TextBlock Text="场景名" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#9A9AA3" />
+            <TextBox x:Name="SceneNameBox" Width="260" />
+        </StackPanel>
+
+        <Grid Grid.Row="2" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="FilterBox" Grid.Column="0" ToolTip="按文件名或路径筛选（结果以扁平列表显示）" />
+            <Button x:Name="SelectAllButton" Grid.Column="1" Content="全选" Margin="8,0,4,0" />
+            <Button x:Name="ClearAllButton" Grid.Column="2" Content="清空" Margin="0" />
+        </Grid>
+
+        <TreeView x:Name="FileTree" Grid.Row="3">
+            <TreeView.ItemTemplate>
+                <HierarchicalDataTemplate ItemsSource="{Binding Children}">
+                    <StackPanel Orientation="Horizontal">
+                        <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay}"
+                                  VerticalAlignment="Center"
+                                  AutomationProperties.Name="{Binding Name}" />
+                        <TextBlock Text="{Binding Name}" Margin="6,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                </HierarchicalDataTemplate>
+            </TreeView.ItemTemplate>
+        </TreeView>
+
+        <Grid Grid.Row="4" Margin="0,12,0,0">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                <Button x:Name="CreateButton" Content="创建" Style="{StaticResource Primary}" />
+                <Button x:Name="CancelButton" Content="取消" Margin="0" />
+            </StackPanel>
+            <TextBlock x:Name="StatusText" HorizontalAlignment="Right" VerticalAlignment="Center"
+                       Foreground="#9A9AA3" />
+        </Grid>
+    </Grid>
+</Window>

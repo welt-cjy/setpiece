@@ -38,7 +38,6 @@ internal static class AdapterFactory
         "browser" or "pdf" or "image" => new WebAdapter(id.ToLowerInvariant()),
         _ => new ShellAdapter(),
     };
-
     public static bool ExcelRegistered() => Type.GetTypeFromProgID("Excel.Application") is not null;
 
     public static string? VsCodePath()
@@ -74,7 +73,13 @@ internal static class AdapterFactory
         return null;
     }
 
-    public static string FileStem(string file) => Path.GetFileNameWithoutExtension(file);
+    // 标题匹配：只认完整文件名。去掉扩展名再匹配会误伤同前缀文件
+    // （instructions.md 命中 instructions.jsonl）或同名文件夹（instructions）。
+    public static bool TitleMatches(string title, string file)
+    {
+        string name = Path.GetFileName(file);
+        return name.Length > 0 && title.Contains(name, StringComparison.OrdinalIgnoreCase);
+    }
 }
 
 internal sealed class ExcelAdapter : IAppAdapter
@@ -85,13 +90,10 @@ internal sealed class ExcelAdapter : IAppAdapter
 
     public WindowInfo? Locate(string file)
     {
-        string name = Path.GetFileName(file);
-        string stem = AdapterFactory.FileStem(file);
         var windows = WindowScanner.Scan()
             .Where(w => Path.GetFileName(w.Exe).Equals("EXCEL.EXE", StringComparison.OrdinalIgnoreCase))
             .ToList();
-        return windows.FirstOrDefault(w => w.Title.Contains(name, StringComparison.OrdinalIgnoreCase))
-               ?? windows.FirstOrDefault(w => w.Title.Contains(stem, StringComparison.OrdinalIgnoreCase));
+        return windows.FirstOrDefault(w => AdapterFactory.TitleMatches(w.Title, file));
     }
 
     public WindowInfo? Launch(string file, string workDir, int timeoutMs)
@@ -150,13 +152,10 @@ internal sealed class VsCodeAdapter : IAppAdapter
 
     public WindowInfo? Locate(string file)
     {
-        string name = Path.GetFileName(file);
-        string stem = AdapterFactory.FileStem(file);
         var windows = WindowScanner.Scan()
             .Where(w => Path.GetFileName(w.Exe).Equals("Code.exe", StringComparison.OrdinalIgnoreCase))
             .ToList();
-        return windows.FirstOrDefault(w => w.Title.Contains(name, StringComparison.OrdinalIgnoreCase))
-               ?? windows.FirstOrDefault(w => w.Title.Contains(stem, StringComparison.OrdinalIgnoreCase));
+        return windows.FirstOrDefault(w => AdapterFactory.TitleMatches(w.Title, file));
     }
 
     public WindowInfo? Launch(string file, string workDir, int timeoutMs)
@@ -192,7 +191,7 @@ internal sealed class VsCodeAdapter : IAppAdapter
         while (sw.ElapsedMilliseconds < 3000)
         {
             WindowScanner.Refresh(fresh);
-            if (fresh.Title.Contains(name, StringComparison.OrdinalIgnoreCase)) break;
+            if (AdapterFactory.TitleMatches(fresh.Title, file)) break;
             Thread.Sleep(200);
         }
         return fresh;
@@ -207,13 +206,10 @@ internal sealed class ShellAdapter : IAppAdapter
 
     public WindowInfo? Locate(string file)
     {
-        string name = Path.GetFileName(file);
-        string stem = AdapterFactory.FileStem(file);
         var windows = WindowScanner.Scan()
             .Where(w => !string.Equals(w.Class, "#32770", StringComparison.OrdinalIgnoreCase))
             .ToList();
-        return windows.FirstOrDefault(w => w.Title.Contains(name, StringComparison.OrdinalIgnoreCase))
-               ?? windows.FirstOrDefault(w => w.Title.Contains(stem, StringComparison.OrdinalIgnoreCase));
+        return windows.FirstOrDefault(w => AdapterFactory.TitleMatches(w.Title, file));
     }
 
     public WindowInfo? Launch(string file, string workDir, int timeoutMs)
@@ -225,14 +221,19 @@ internal sealed class ShellAdapter : IAppAdapter
             WorkingDirectory = workDir,
         });
 
-        string name = Path.GetFileName(file);
-        string stem = AdapterFactory.FileStem(file);
+        // Office 冷启动经常超过 25 秒（尤其是受保护的视图），这里放宽等待。
+        int wait = IsOfficeFile(file) ? Math.Max(timeoutMs, 45000) : timeoutMs;
+
         return WindowScanner.WaitNew(before, w =>
                    !string.Equals(w.Class, "#32770", StringComparison.OrdinalIgnoreCase) &&
-                   (w.Title.Contains(name, StringComparison.OrdinalIgnoreCase) ||
-                    w.Title.Contains(stem, StringComparison.OrdinalIgnoreCase)), timeoutMs)
+                   AdapterFactory.TitleMatches(w.Title, file), wait)
                ?? Locate(file);
     }
+
+    private static bool IsOfficeFile(string file) =>
+        Path.GetExtension(file).ToLowerInvariant() is
+            ".doc" or ".docx" or ".docm" or ".ppt" or ".pptx" or ".pptm" or
+            ".xls" or ".xlsx" or ".xlsm";
 
     public void Close(WindowInfo window) => WindowScanner.Close(window.Handle);
 }
@@ -277,7 +278,7 @@ internal sealed class WebAdapter : IAppAdapter
         while (sw.ElapsedMilliseconds < 5000)
         {
             WindowScanner.Refresh(hit);
-            if (hit.Title.Contains(name, StringComparison.OrdinalIgnoreCase)) break;
+            if (AdapterFactory.TitleMatches(hit.Title, file)) break;
             Thread.Sleep(200);
         }
         return hit;

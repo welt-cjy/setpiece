@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "scenes": [
+    {
+      "name": "main",
+      "template": "cross-monitor",
+      "monitor": "primary",
+      "items": [
+        { "file": "data/run-a.csv" },
+        { "file": "data/run-b.csv" }
+      ]
+    }
+  ]
+}

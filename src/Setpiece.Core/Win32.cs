@@ -43,8 +43,12 @@ internal sealed class MonitorInfo
     public Rect WorkArea;
     public bool Primary;
     public int Index;
+    public string Device = "";
+
+    public string DeviceKey => Device.Replace(@"\\.\", "");
+
     public override string ToString() =>
-        $"#{Index} {(Primary ? "primary" : "secondary")} bounds={Bounds} work={WorkArea}";
+        $"#{Index} {(Primary ? "primary" : "secondary")} {DeviceKey} bounds={Bounds} work={WorkArea}";
 }
 
 internal sealed class WindowInfo
@@ -101,6 +105,17 @@ internal static class Native
         public uint dwFlags;
     }
 
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct MONITORINFOEX
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string szDevice;
+    }
+
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     private delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdc, ref RECT lprcMonitor, IntPtr dwData);
 
@@ -126,6 +141,8 @@ internal static class Native
     [DllImport("dwmapi.dll", EntryPoint = "DwmGetWindowAttribute")] public static extern int DwmGetWindowAttributeInt(IntPtr hWnd, int attr, out int value, int size);
     [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
     [DllImport("user32.dll")] private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO mi);
+    [DllImport("user32.dll", EntryPoint = "GetMonitorInfoW", CharSet = CharSet.Unicode)]
+    private static extern bool GetMonitorInfoEx(IntPtr hMonitor, ref MONITORINFOEX mi);
     [DllImport("user32.dll")] private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, MonitorEnumProc cb, IntPtr data);
     [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern bool QueryFullProcessImageName(IntPtr h, int flags, StringBuilder s, ref int size);
@@ -140,8 +157,8 @@ internal static class Native
 
         bool Callback(IntPtr hMon, IntPtr hdc, ref RECT r, IntPtr data)
         {
-            var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
-            if (GetMonitorInfo(hMon, ref mi))
+            var mi = new MONITORINFOEX { cbSize = Marshal.SizeOf<MONITORINFOEX>(), szDevice = "" };
+            if (GetMonitorInfoEx(hMon, ref mi))
             {
                 list.Add(new MonitorInfo
                 {
@@ -150,6 +167,7 @@ internal static class Native
                     WorkArea = new Rect(mi.rcWork.Left, mi.rcWork.Top, mi.rcWork.Right, mi.rcWork.Bottom),
                     Primary = (mi.dwFlags & 1) != 0,
                     Index = list.Count,
+                    Device = mi.szDevice,
                 });
             }
             return true;

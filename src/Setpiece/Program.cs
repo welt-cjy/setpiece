@@ -23,6 +23,7 @@ internal static class Program
             {
                 "doctor" => Doctor(root),
                 "init" => Init(root, opts),
+                "scan" => ScanProject(root),
                 "list" => List(root),
                 "apply" => Apply(root, opts, pos),
                 "capture" => Capture(root, opts, pos),
@@ -54,7 +55,7 @@ internal static class Program
         if (pos.Count == 0) return UsageError("capture 需要场景名");
         SetpieceConfig cfg = ConfigStore.Load(root);
         Configure(cfg);
-        return SceneRunner.Capture(root, cfg, pos[0]);
+        return SceneRunner.Capture(root, cfg, pos[0], out _);
     }
 
     private static int Close(string root, Dictionary<string, string?> opts, List<string> pos)
@@ -84,6 +85,38 @@ internal static class Program
         Console.WriteLine($"已创建 {ConfigStore.ConfigPath(root)}");
         if (files.Count == 0)
             Console.WriteLine("提示: 用 --files a.csv,b.csv,main.py 指定场景文件。");
+        return 0;
+    }
+
+    private static int ScanProject(string root)
+    {
+        if (!Directory.Exists(root))
+        {
+            Console.Error.WriteLine($"目录不存在: {root}");
+            return 2;
+        }
+
+        List<ScanCandidate> candidates = ProjectScanner.Scan(root);
+        if (candidates.Count == 0)
+        {
+            Console.WriteLine("没有找到可加入场景的候选文件。");
+            return 0;
+        }
+
+        string? category = null;
+        foreach (ScanCandidate candidate in candidates)
+        {
+            if (candidate.Category != category)
+            {
+                Console.WriteLine();
+                Console.WriteLine($"## {candidate.Category}");
+                category = candidate.Category;
+            }
+            Console.WriteLine($"  {candidate.RelativePath}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"共 {candidates.Count} 个候选（扫描深度 3，已跳过 bin/obj/node_modules 等目录）");
         return 0;
     }
 
@@ -188,6 +221,7 @@ setpiece <命令> [选项]
 
 命令:
   init      创建 .setpiece/setpiece.json
+  scan      扫描项目，列出可加入场景的候选文件
   list      列出场景
   apply     按场景打开并摆放窗口
   capture   捕获当前窗口位置写回场景
@@ -203,7 +237,8 @@ setpiece <命令> [选项]
   --timeout <毫秒>   等待窗口的超时（默认 25000）
 
 示例:
-  setpiece init --files data/run-a.csv,data/run-b.csv,main.py
+  setpiece scan
+  setpiece init --files src/main.py,results/summary.csv,paper/paper.pdf
   setpiece apply main
   setpiece capture main
   setpiece close main

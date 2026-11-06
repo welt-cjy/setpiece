@@ -31,6 +31,7 @@ public partial class MainWindow : Window
     private static readonly string[] Templates =
     {
         "auto", "left-right", "left-right-top-bottom", "grid", "row", "column", "focus+side",
+        "cross-monitor",
     };
 
     private static readonly string[] Adapters =
@@ -38,19 +39,27 @@ public partial class MainWindow : Window
         "auto", "vscode", "excel", "browser", "pdf", "image", "shell",
     };
 
+    private const string InheritMonitor = "(继承场景)";
+
     private sealed class EditItem
     {
         public string File = "";
         public string? Adapter;
+        public string? Monitor;
+        public bool? AutoOpen;
         public double[]? Rect;
         public string? State;
 
         public override string ToString() =>
-            $"{System.IO.Path.GetFileName(File)}   [{Adapter ?? "auto"}]";
+            $"{System.IO.Path.GetFileName(File)}   [{Adapter ?? "auto"}]" +
+            (Monitor is null ? "" : $"  @{Monitor}") +
+            (AutoOpen == false ? "  [未启用]" : "");
     }
 
     private string? _root;
     private SetpieceConfig? _config;
+    private string? _pendingRoot;
+    private string? _promptedRoot;
     private bool _editing;
     private bool _syncing;
     private ObservableCollection<EditItem> _editItems = new();
@@ -61,6 +70,10 @@ public partial class MainWindow : Window
 
         BrowseButton.Click += (_, _) => PickFolder();
         RefreshButton.Click += (_, _) => LoadProject(_root);
+        NewWorkspaceButton.Click += (_, _) => PromptWorkspace(_root, force: true);
+        NewSceneButton.Click += (_, _) => PromptWorkspace(_root, force: true);
+        CaptureWindowsButton.Click += async (_, _) => await CaptureFromWindowsAsync();
+        DeleteSceneButton.Click += (_, _) => DeleteScene();
         SceneList.SelectionChanged += (_, _) => ShowScene();
 
         ApplyButton.Click += async (_, _) => await RunAsync("apply");
@@ -76,8 +89,10 @@ public partial class MainWindow : Window
         RemoveItemButton.Click += (_, _) => RemoveItem();
         MoveUpButton.Click += (_, _) => MoveItem(-1);
         MoveDownButton.Click += (_, _) => MoveItem(1);
-        EditItems.SelectionChanged += (_, _) => SyncAdapterFromSelection();
-        EditAdapter.SelectionChanged += (_, _) => ApplyAdapter();
+        EditItems.SelectionChanged += (_, _) => SyncFromSelection();
+        EditAdapter.SelectionChanged += (_, _) => ApplyItemOptions();
+        EditItemMonitor.SelectionChanged += (_, _) => ApplyItemOptions();
+        EditAutoOpen.Click += (_, _) => ApplyItemOptions();
         SaveEditButton.Click += (_, _) => SaveEdit();
         CancelEditButton.Click += (_, _) => ExitEdit();
         ResetLayoutButton.Click += (_, _) => ResetLayout();
@@ -197,8 +212,129 @@ public partial class MainWindow : Window
             SceneTitle.Text = "没有可用场景";
             SceneMeta.Text = "";
             Log($"无法加载配置: {ex.Message}");
-            StatusText.Text = "未找到 .setpiece/setpiece.json，可先用命令行 setpiece init 创建";
+            StatusText.Text = "这个项目还没有 Setpiece 配置";
+            _pendingRoot = root;
+
+            if (IsVisible) PromptWorkspace(root);
         }
+    }
+
+    protected override void OnContentRendered(EventArgs e)
+    {
+        base.OnContentRendered(e);
+        if (_pendingRoot is null) return;
+
+        string root = _pendingRoot;
+        _pendingRoot = null;
+        PromptWorkspace(root);
+    }
+
+    private void PromptWorkspace(string? root, bool force = false)
+    {
+        if (root is null || !Directory.Exists(root)) return;
+        if (!force && _config is not null) return;
+        if (!force && string.Equals(_promptedRoot, root, StringComparison.OrdinalIgnoreCase)) return;
+
+        if (!IsVisible)
+        {
+            _pendingRoot = root;
+            return;
+        }
+
+        _promptedRoot = root;
+        _pendingRoot = null;
+
+        var dialog = new NewWorkspaceWindow(root, _config) { Owner = this };
+        if (dialog.ShowDialog() != true) return;
+
+        LoadProject(root);
+        int index = _config?.Scenes.FindIndex(s =>
+            string.Equals(s.Name, dialog.CreatedSceneName, StringComparison.OrdinalIgnoreCase)) ?? -1;
+        if (index >= 0) SceneList.SelectedIndex = index;
+        StartEdit();
+    }
+
+    private async Task CaptureFromWindowsAsync()
+    {
+        if (_root is null)
+        {
+            Log("先选择项目");
+            return;
+        }
+
+        string root = _root;
+        SetpieceConfig config = _config ?? new SetpieceConfig();
+
+        SetBusy(true);
+        CaptureResult result = await Task.Run(() => WindowSceneBuilder.Capture(config, root));
+
+        if (result.Windows.Count == 0)
+        {
+            Log($"没有从窗口里识别到项目文件（{result.Unmatched} 个窗口未匹配）");
+            SetBusy(false);
+            return;
+        }
+
+        string name = UniqueSceneName(config, "窗口场景");
+        config.Scenes.Add(new Scene
+        {
+            Name = name,
+            Template = "auto",
+            Monitor = "primary",
+            Items = result.Windows.Select(w => new SceneItem
+            {
+                File = w.RelativePath,
+                Adapter = w.Adapter.Length > 0 ? w.Adapter : null,
+                Monitor = w.Monitor,
+                Rect = w.Rect,
+                State = w.State,
+            }).ToList(),
+        });
+
+        ConfigStore.Save(root, config);
+        string extra = result.Unmatched > 0 ? $"，另有 {result.Unmatched} 个窗口未匹配" : "";
+
+        LoadProject(root);
+        int index = _config?.Scenes.FindIndex(s =>
+            string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase)) ?? -1;
+        if (index >= 0) SceneList.SelectedIndex = index;
+
+        SetBusy(false);
+        StartEdit();
+        Log($"已从 {result.Windows.Count} 个窗口生成场景「{name}」{extra}");
+    }
+
+    private static string UniqueSceneName(SetpieceConfig config, string baseName)
+    {
+        string name = baseName;
+        int i = 2;
+        while (config.Scenes.Any(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase)))
+            name = $"{baseName} {i++}";
+        return name;
+    }
+
+    private void DeleteScene()
+    {
+        if (_config is null || _root is null || SceneList.SelectedIndex < 0)
+        {
+            Log("先选择一个场景");
+            return;
+        }
+
+        Scene scene = _config.Scenes[SceneList.SelectedIndex];
+        MessageBoxResult result = System.Windows.MessageBox.Show(
+            this,
+            $"删除场景「{scene.Name}」？\n文件本身不会被删除。",
+            "Setpiece",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        if (result != MessageBoxResult.Yes) return;
+
+        ExitEdit();
+        _config.Scenes.Remove(scene);
+        ConfigStore.Save(_root, _config);
+        Log($"已删除场景 {scene.Name}");
+        LoadProject(_root);
     }
 
     private void ShowScene()
@@ -208,15 +344,21 @@ public partial class MainWindow : Window
 
         Scene scene = _config.Scenes[SceneList.SelectedIndex];
         SceneTitle.Text = scene.Name;
-        SceneMeta.Text = $"{scene.Items.Count} 个文件 · 模板 {scene.Template} · 显示器 {scene.Monitor}";
+        int disabled = scene.Items.Count(i => i.AutoOpen == false);
+        SceneMeta.Text = $"{scene.Items.Count} 个文件 · 模板 {scene.Template} · 显示器 {scene.Monitor}" +
+                         (disabled > 0 ? $" · {disabled} 个未启用" : "");
         LogBox.Text = string.Join(Environment.NewLine,
-            scene.Items.Select(i => $"{i.File}   [{(i.Adapter ?? "auto")}]"));
+            scene.Items.Select(i => $"{i.File}   [{(i.Adapter ?? "auto")}]" +
+                                    (i.AutoOpen == false ? "   [未启用]" : "")));
     }
 
     // ---------------- 编辑器 ----------------
 
     private List<string> MonitorOptions() =>
-        new[] { "primary" }.Concat(Native.Screens().Select(s => s.Index.ToString())).ToList();
+        new[] { "primary" }.Concat(Native.Screens().Select(s => s.DeviceKey)).ToList();
+
+    private List<string> ItemMonitorOptions() =>
+        new[] { InheritMonitor }.Concat(Native.Screens().Select(s => s.DeviceKey)).ToList();
 
     private void StartEdit()
     {
@@ -241,6 +383,8 @@ public partial class MainWindow : Window
         {
             File = i.File,
             Adapter = i.Adapter,
+            Monitor = i.Monitor,
+            AutoOpen = i.AutoOpen,
             Rect = i.Rect,
             State = i.State,
         }));
@@ -249,6 +393,9 @@ public partial class MainWindow : Window
 
         EditAdapter.ItemsSource = Adapters;
         EditAdapter.SelectedItem = "auto";
+
+        EditItemMonitor.ItemsSource = ItemMonitorOptions();
+        EditItemMonitor.SelectedItem = InheritMonitor;
 
         RunPanel.Visibility = Visibility.Collapsed;
         EditPanel.Visibility = Visibility.Visible;
@@ -301,23 +448,31 @@ public partial class MainWindow : Window
         EditItems.SelectedIndex = target;
     }
 
-    private void SyncAdapterFromSelection()
+    private void SyncFromSelection()
     {
         if (_syncing) return;
         if (EditItems.SelectedItem is not EditItem item) return;
 
         _syncing = true;
         EditAdapter.SelectedItem = item.Adapter ?? "auto";
+        EditItemMonitor.SelectedItem = item.Monitor ?? InheritMonitor;
+        EditAutoOpen.IsChecked = item.AutoOpen != false;
         _syncing = false;
     }
 
-    private void ApplyAdapter()
+    private void ApplyItemOptions()
     {
         if (_syncing) return;
         if (EditItems.SelectedItem is not EditItem item) return;
 
-        string value = EditAdapter.SelectedItem as string ?? "auto";
-        item.Adapter = value == "auto" ? null : value;
+        string adapter = EditAdapter.SelectedItem as string ?? "auto";
+        item.Adapter = adapter == "auto" ? null : adapter;
+
+        string monitor = EditItemMonitor.SelectedItem as string ?? InheritMonitor;
+        item.Monitor = monitor == InheritMonitor ? null : monitor;
+
+        item.AutoOpen = EditAutoOpen.IsChecked == true ? null : false;
+
         EditItems.Items.Refresh();
     }
 
@@ -327,8 +482,9 @@ public partial class MainWindow : Window
         {
             item.Rect = null;
             item.State = null;
+            item.Monitor = null;
         }
-        Log("已清除所有自定义位置，运行时将按模板分配");
+        Log("已清除所有自定义位置和显示器，运行时将按模板分配");
     }
 
     private void SaveEdit()
@@ -357,6 +513,8 @@ public partial class MainWindow : Window
         {
             File = e.File,
             Adapter = e.Adapter,
+            Monitor = e.Monitor,
+            AutoOpen = e.AutoOpen,
             Rect = e.Rect,
             State = e.State,
         }).ToList();
@@ -414,13 +572,14 @@ public partial class MainWindow : Window
         bool wasHidden = !IsVisible;
 
         SetBusy(true);
+        int disabled = 0;
         var (code, output) = await Task.Run(() => ExecuteOnSta(() =>
         {
             Runtime.Configure(config);
             return action switch
             {
                 "apply" => SceneRunner.Apply(root, config, scene.Name, null, false, 25000),
-                "capture" => SceneRunner.Capture(root, config, scene.Name),
+                "capture" => SceneRunner.Capture(root, config, scene.Name, out disabled),
                 "close" => SceneRunner.Close(root, config, scene.Name),
                 _ => 2,
             };
@@ -429,7 +588,7 @@ public partial class MainWindow : Window
         Log($"> {action} {scene.Name}");
         Log(output.TrimEnd());
         StatusText.Text = code == 0
-            ? $"{action} 完成"
+            ? $"{action} 完成" + (action == "capture" && disabled > 0 ? $"（{disabled} 个未打开已停用）" : "")
             : $"{action} 有未完成的项（退出码 {code}）";
         SetBusy(false);
 

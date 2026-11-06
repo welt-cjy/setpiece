@@ -4,6 +4,8 @@ internal sealed class RunRow
 {
     public string File = "";
     public string Adapter = "";
+    public string Monitor = "";
+    public string Window = "";
     public string Source = "";
     public string Target = "";
     public string Actual = "";
@@ -19,23 +21,40 @@ internal static class SceneRunner
         Scene? scene = cfg.Find(sceneName);
         if (scene is null) return Fail($"未找到场景: {sceneName}");
 
-        MonitorInfo? monitor = ResolveMonitor(monitorName ?? scene.Monitor);
-        if (monitor is null) return Fail($"未找到显示器: {monitorName ?? scene.Monitor}");
+        var screens = Native.Screens();
+        if (screens.Count == 0) return Fail("未找到显示器");
 
-        List<double[]> rects = Layout.Rects(scene.Template, scene.Items.Count);
+        List<Slot> slots = Layout.Plan(scene, screens, monitorName);
+        if (slots.Count != scene.Items.Count) return Fail("无法计算布局");
+
         var rows = new List<RunRow>();
 
         for (int i = 0; i < scene.Items.Count; i++)
         {
             SceneItem item = scene.Items[i];
+            Slot slot = slots[i];
             string path = ResolvePath(root, item.File);
             string adapterId = item.Adapter ?? ResolveAdapter(cfg, path);
-            var row = new RunRow { File = item.File, Adapter = adapterId };
+            var row = new RunRow
+            {
+                File = item.File,
+                Adapter = adapterId,
+                Monitor = slot.Monitor.DeviceKey,
+                Note = slot.Note ?? "",
+            };
             rows.Add(row);
 
             if (!File.Exists(path) && !Directory.Exists(path))
             {
                 row.Note = "文件不存在";
+                continue;
+            }
+
+            if (item.AutoOpen == false)
+            {
+                row.Source = "未启用";
+                row.Note = "未保存位置，已跳过；手动打开后保存位置可重新启用";
+                row.Ok = true;
                 continue;
             }
 
@@ -50,7 +69,7 @@ internal static class SceneRunner
                 }
                 else if (dryRun)
                 {
-                    var planned = Rect.FromNormalized(item.Rect ?? rects[i], monitor.WorkArea);
+                    var planned = Rect.FromNormalized(item.Rect ?? slot.Rect, slot.Monitor.WorkArea);
                     row.Source = "将启动";
                     row.Target = planned.ToString();
                     row.Ok = true;
@@ -65,12 +84,13 @@ internal static class SceneRunner
 
                 if (win is null)
                 {
-                    row.Note = "窗口未出现（应用可能未就绪，或被其他实例占用）";
+                    row.Note = "窗口未出现（应用启动较慢、被其他实例占用，或该类型没有默认打开方式）";
                     continue;
                 }
 
-                Rect target = Rect.FromNormalized(item.Rect ?? rects[i], monitor.WorkArea);
+                Rect target = Rect.FromNormalized(item.Rect ?? slot.Rect, slot.Monitor.WorkArea);
                 row.Target = target.ToString();
+                row.Window = win.Title;
 
                 if (dryRun)
                 {
@@ -89,9 +109,12 @@ internal static class SceneRunner
                 row.Actual = actual.ToString();
                 row.Ok = placed;
                 if (!placed)
-                    row.Note = WindowScanner.LastPlaceError.Length > 0
+                {
+                    string placeNote = WindowScanner.LastPlaceError.Length > 0
                         ? $"摆放未命中目标（{WindowScanner.LastPlaceError}）"
                         : "摆放未命中目标";
+                    row.Note = row.Note.Length > 0 ? row.Note + "；" + placeNote : placeNote;
+                }
             }
             catch (Exception ex)
             {
@@ -103,12 +126,15 @@ internal static class SceneRunner
         return rows.All(r => r.Ok) ? 0 : 1;
     }
 
-    public static int Capture(string root, SetpieceConfig cfg, string sceneName)
+    public static int Capture(string root, SetpieceConfig cfg, string sceneName, out int disabled)
     {
+        disabled = 0;
+
         Scene? scene = cfg.Find(sceneName);
         if (scene is null) return Fail($"未找到场景: {sceneName}");
 
         var rows = new List<RunRow>();
+
         foreach (SceneItem item in scene.Items)
         {
             string path = ResolvePath(root, item.File);
@@ -122,16 +148,24 @@ internal static class SceneRunner
                 WindowInfo? win = Resolve(adapter, path);
                 if (win is null)
                 {
-                    row.Note = "未找到已打开的窗口";
+                    // 没打开的条目不进入自动打开列表，但保留在场景里作为候选。
+                    item.AutoOpen = false;
+                    disabled++;
+                    row.Note = "未打开，已停用自动打开";
+                    row.Ok = true;
                     continue;
                 }
 
                 Rect frame = WindowScanner.Frame(win.Handle);
                 MonitorInfo screen = WindowScanner.ScreenOf(win.Handle);
                 item.Rect = frame.Normalized(screen.WorkArea);
+                item.Monitor = screen.DeviceKey;
                 item.State = Native.IsZoomed(win.Handle) ? "maximized" : "normal";
+                item.AutoOpen = null;
 
-                row.Source = screen.Primary ? "primary" : $"monitor#{screen.Index}";
+                row.Monitor = screen.DeviceKey;
+                row.Window = win.Title;
+                row.Source = screen.Primary ? "primary" : screen.DeviceKey;
                 row.Target = string.Join(", ", item.Rect.Select(v => v.ToString("0.###")));
                 row.Actual = frame.ToString();
                 row.Ok = true;
@@ -144,6 +178,8 @@ internal static class SceneRunner
 
         ConfigStore.Save(root, cfg);
         Print(rows);
+        if (disabled > 0)
+            Console.WriteLine($"已停用 {disabled} 个未打开的文件（保留在场景中，手动打开后保存位置即可恢复）");
         Console.WriteLine($"已写入 {ConfigStore.ConfigPath(root)}");
         return rows.All(r => r.Ok) ? 0 : 1;
     }
@@ -211,8 +247,10 @@ internal static class SceneRunner
     {
         foreach (RunRow r in rows)
         {
-            Console.WriteLine($"[{(r.Ok ? "OK  " : "FAIL")}] {r.File}  ({r.Adapter}, {r.Source})");
+            string where = r.Monitor.Length > 0 ? $"  @{r.Monitor}" : "";
+            Console.WriteLine($"[{(r.Ok ? "OK  " : "FAIL")}] {r.File}  ({r.Adapter}, {r.Source}){where}");
             if (r.Target.Length > 0) Console.WriteLine($"        target = {r.Target}");
+            if (r.Window.Length > 0) Console.WriteLine($"        window = \"{r.Window}\"");
             if (r.Actual.Length > 0) Console.WriteLine($"        actual = {r.Actual}");
             if (r.Note.Length > 0) Console.WriteLine($"        {r.Note}");
         }
@@ -231,19 +269,10 @@ internal static class SceneRunner
     private static string ResolveAdapter(SetpieceConfig cfg, string path)
     {
         string ext = Path.GetExtension(path);
-        return !string.IsNullOrEmpty(ext) && cfg.Extensions.TryGetValue(ext, out string? adapter)
+        return !string.IsNullOrEmpty(ext) && cfg.Extensions is not null &&
+               cfg.Extensions.TryGetValue(ext, out string? adapter)
             ? adapter
             : "shell";
-    }
-
-    private static MonitorInfo? ResolveMonitor(string name)
-    {
-        var screens = Native.Screens();
-        if (string.IsNullOrWhiteSpace(name) || name.Equals("primary", StringComparison.OrdinalIgnoreCase))
-            return screens.FirstOrDefault(s => s.Primary) ?? screens.FirstOrDefault();
-        if (int.TryParse(name, out int index))
-            return screens.FirstOrDefault(s => s.Index == index);
-        return screens.FirstOrDefault(s => s.ToString().Contains(name, StringComparison.OrdinalIgnoreCase));
     }
 
     private static int Fail(string message)

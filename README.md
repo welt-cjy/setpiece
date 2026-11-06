@@ -7,7 +7,7 @@
 | 文件 | 说明 |
 |---|---|
 | `Setpiece.App.exe` | 图形界面 |
-| `setpiece.exe` | 命令行（`doctor` / `init` / `apply` / `capture` / `close` / `list`） |
+| `setpiece.exe` | 命令行（`doctor` / `scan` / `init` / `apply` / `capture` / `close` / `list`） |
 
 系统要求：Windows 10 / 11 x64。
 
@@ -26,12 +26,28 @@
 
 1. 运行 `Setpiece-Setup-0.1.0.exe` 安装，或直接双击 `Setpiece.App.exe`；
 2. 点「选择项目…」指向一个项目目录；
-3. 没有配置时先建一个场景，或用命令行：
+3. 如果项目还没有配置，会弹出「新建工作区」：扫描整个项目（深度 3，跳过
+   `bin` / `obj` / `node_modules` / `.venv` 等目录），按代码、表格、图片、文档、网页
+   列出候选文件，勾选后生成第一个场景；
+4. 也可以直接用命令行：
 
 ```bat
-setpiece init --project D:\lab\exp-042 --files data\run-a.csv,data\run-b.csv,main.py
-setpiece apply --project D:\lab\exp-042 main
+setpiece scan                                   # 看看项目里有哪些候选文件
+setpiece init --files src/main.py,results/run.csv,paper/paper.pdf
+setpiece apply main
 ```
+
+场景里的文件路径就是项目里的实际相对路径，不要求放在固定目录。
+
+### 保存当前位置
+
+手动整理好窗口后点「保存当前位置」：
+
+- 当前打开的文件 → 记录位置和显示器，设为自动打开；
+- 当前没打开的文件 → 标记为 `"autoOpen": false`，保留在场景里作为候选，
+  下次「打开场景」时不会被启动。
+
+所以在向导里全选了很多文件、实际只用了其中几个时，保存一次位置就能把自动打开列表收敛到真正在用的那些。
 
 ## 配置文件
 
@@ -42,6 +58,27 @@ setpiece apply --project D:\lab\exp-042 main
 - `scenes[]`：`name` / `template` / `monitor` / `items[]`
 - `items[].rect`：相对显示器工作区的归一化坐标 `[左, 上, 右, 下]`
 - `items[].adapter`：单独覆盖打开方式
+- `items[].monitor`：单独指定显示器（`DISPLAY1`、`primary` 或序号）
+- `items[].autoOpen`：`false` 表示只保留为候选，打开场景时不启动
+
+## 跨屏布局
+
+`template: "cross-monitor"` 会把文件按显示器从左到右轮转分配，同一块屏上的多个窗口再按
+`auto` 切分。也可以给单个文件固定显示器：
+
+```json
+{
+  "name": "compare",
+  "template": "auto",
+  "items": [
+    { "file": "main.py", "monitor": "DISPLAY1", "rect": [0,0,0.5,1] },
+    { "file": "result.csv", "monitor": "DISPLAY2", "rect": [0,0,1,1] }
+  ]
+}
+```
+
+`monitor` 用设备名（`setpiece doctor` 里能看到），也支持 `primary` 和序号。
+指定的显示器不存在时会自动回退到主屏，并在输出里给出提示。
 
 ## 热键
 
@@ -69,6 +106,16 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `setpiece-0.1.0-win-x64.zip` | 便携版（需 .NET 8 Desktop Runtime） |
 | `setpiece-0.1.0-selfcontained-win-x64.zip` | 自包含版 |
 | `Setpiece-Setup-0.1.0.exe` | 安装包 |
+
+## 从当前窗口生成场景
+
+也可以反过来：先把文件打开、窗口摆好，再点左侧「从窗口」。
+
+Setpiece 会枚举当前窗口，按标题里出现的文件名匹配项目里的文件，把**位置、显示器、最大化状态**
+一起记成一个新场景，省掉手工勾选和重新摆放。
+
+- 匹配依据是文件名出现在窗口标题里；浏览器网页的标题通常是页面标题，可能识别不到。
+- 没识别出来的窗口会在日志里给出数量。
 
 ## 已知限制
 

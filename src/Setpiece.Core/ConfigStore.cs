@@ -46,15 +46,20 @@ internal static class ConfigStore
         SetpieceConfig cfg = JsonSerializer.Deserialize<SetpieceConfig>(File.ReadAllText(path), Options)
                               ?? new SetpieceConfig();
 
-        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var kv in cfg.Extensions) map[kv.Key.ToLowerInvariant()] = kv.Value;
-        cfg.Extensions = map;
+        if (cfg.Extensions is not null)
+        {
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in cfg.Extensions) map[kv.Key.ToLowerInvariant()] = kv.Value;
+            cfg.Extensions = map.Count > 0 ? map : null;
+        }
+
         return cfg;
     }
 
     public static void Save(string root, SetpieceConfig cfg)
     {
         if (cfg.Viewers is { Count: 0 }) cfg.Viewers = null;
+        if (cfg.Extensions is { Count: 0 }) cfg.Extensions = null;
 
         string path = ConfigPath(root);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
