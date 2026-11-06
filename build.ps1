@@ -7,7 +7,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $dist = [IO.Path]::Combine($root, 'dist')
-$version = '0.1.0'
+$version = '0.2.0'
 
 if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
 New-Item -ItemType Directory -Path $dist -Force | Out-Null

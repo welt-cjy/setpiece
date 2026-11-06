@@ -1,5 +1,5 @@
 #define AppName "Setpiece"
-#define AppVersion "0.1.0"
+#define AppVersion "0.2.0"
 #define SourceDir "..\dist\payload-loose"
 
 [Setup]

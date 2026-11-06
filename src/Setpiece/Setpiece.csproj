@@ -8,7 +8,7 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>setpiece</AssemblyName>
     <RootNamespace>Setpiece</RootNamespace>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Product>Setpiece</Product>
     <AssemblyTitle>Setpiece CLI</AssemblyTitle>
     <Description>Project-scoped window scenes for Windows</Description>

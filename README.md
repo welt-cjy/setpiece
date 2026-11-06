@@ -1,4 +1,4 @@
-# Setpiece 0.1.0
+# Setpiece 0.2.0
 
 以项目为中心的可复现工作现场工具：按场景打开多个文件、按模板并排摆放，一键保存 / 恢复。
 
@@ -11,12 +11,12 @@
 
 系统要求：Windows 10 / 11 x64。
 
-- **安装包**（`Setpiece-Setup-0.1.0.exe`）：双击安装，按用户安装、不需要管理员权限，
+- **安装包**（`Setpiece-Setup-0.2.0.exe`）：双击安装，按用户安装、不需要管理员权限，
   默认装到 `%LOCALAPPDATA%\Programs\Setpiece`，创建开始菜单快捷方式，
   可选桌面快捷方式，并注册卸载项。
-- **便携版**（`setpiece-0.1.0`）：需要安装 .NET 8 Desktop Runtime；
+- **便携版**（`setpiece-0.2.0`）：需要安装 .NET 8 Desktop Runtime；
   内含 `run-app.cmd` / `run-setpiece.cmd`，通过 dotnet 宿主启动。
-- **自包含版**（`setpiece-0.1.0-selfcontained`）：无需安装运行时，体积较大。
+- **自包含版**（`setpiece-0.2.0-selfcontained`）：无需安装运行时，体积较大。
 
 > 如果双击 exe 后窗口操作全部失败、`doctor` 显示 `完整性: Low`，说明程序被本机安全软件
 > 降权到了低完整性级别。便携版请改用 `run-app.cmd`（走 dotnet 宿主，完整性正常）；
@@ -24,7 +24,7 @@
 
 ## 快速开始
 
-1. 运行 `Setpiece-Setup-0.1.0.exe` 安装，或直接双击 `Setpiece.App.exe`；
+1. 运行 `Setpiece-Setup-0.2.0.exe` 安装，或直接双击 `Setpiece.App.exe`；
 2. 点「选择项目…」指向一个项目目录；
 3. 如果项目还没有配置，会弹出「新建工作区」：扫描整个项目（深度 3，跳过
    `bin` / `obj` / `node_modules` / `.venv` 等目录），按代码、表格、图片、文档、网页
@@ -102,10 +102,10 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 
 | 文件 | 说明 |
 |---|---|
-| `setpiece-0.1.0-source.zip` | 源码 |
-| `setpiece-0.1.0-win-x64.zip` | 便携版（需 .NET 8 Desktop Runtime） |
-| `setpiece-0.1.0-selfcontained-win-x64.zip` | 自包含版 |
-| `Setpiece-Setup-0.1.0.exe` | 安装包 |
+| `setpiece-0.2.0-source.zip` | 源码 |
+| `setpiece-0.2.0-win-x64.zip` | 便携版（需 .NET 8 Desktop Runtime） |
+| `setpiece-0.2.0-selfcontained-win-x64.zip` | 自包含版 |
+| `Setpiece-Setup-0.2.0.exe` | 安装包 |
 
 ## 从当前窗口生成场景
 
