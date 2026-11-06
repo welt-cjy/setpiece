@@ -1,9 +1,15 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
 using Microsoft.Win32;
 using Setpiece;
 
@@ -17,6 +23,8 @@ public partial class MainWindow : Window
     private const uint ModNoRepeat = 0x4000;
     private const uint VkKeyW = 0x57;
 
+    private const string GitHubUrl = "https://github.com/welt-cjy/setpiece";
+
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
 
@@ -24,22 +32,48 @@ public partial class MainWindow : Window
     private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
     private readonly TrayController _tray = new();
+    private readonly AppSettings _settings = SettingsStore.Load();
     private HwndSource? _source;
     private bool _exiting;
     private bool _trayHintShown;
 
-    private static readonly string[] Templates =
+    private static readonly Choice[] TemplateChoices =
     {
-        "auto", "left-right", "left-right-top-bottom", "grid", "row", "column", "focus+side",
-        "cross-monitor",
+        new("auto", "自动"),
+        new("left-right", "左右分屏"),
+        new("left-right-top-bottom", "左大右上下"),
+        new("grid", "网格"),
+        new("row", "横向排列"),
+        new("column", "纵向排列"),
+        new("focus+side", "主窗口 + 侧栏"),
+        new("cross-monitor", "跨屏轮转"),
     };
 
-    private static readonly string[] Adapters =
+    private static readonly Choice[] AdapterChoices =
     {
-        "auto", "vscode", "excel", "browser", "pdf", "image", "shell",
+        new("auto", "自动（推荐）"),
+        new("vscode", "VS Code"),
+        new("excel", "Excel"),
+        new("browser", "浏览器"),
+        new("pdf", "PDF 阅读器"),
+        new("image", "图片查看器"),
+        new("shell", "系统默认程序"),
     };
 
     private const string InheritMonitor = "(继承场景)";
+
+    private sealed record Choice(string Key, string Label)
+    {
+        public override string ToString() => Label;
+    }
+
+    private sealed class SceneFileRow
+    {
+        public string File { get; init; } = "";
+        public string Adapter { get; init; } = "";
+        public string Monitor { get; init; } = "";
+        public string AutoOpen { get; init; } = "";
+    }
 
     private sealed class EditItem
     {
@@ -51,8 +85,8 @@ public partial class MainWindow : Window
         public string? State;
 
         public override string ToString() =>
-            $"{System.IO.Path.GetFileName(File)}   [{Adapter ?? "auto"}]" +
-            (Monitor is null ? "" : $"  @{Monitor}") +
+            $"{System.IO.Path.GetFileName(File)}   [{AdapterLabel(Adapter)}]" +
+            (Monitor is null ? "" : $"  @{MonitorLabel(Monitor)}") +
             (AutoOpen == false ? "  [未启用]" : "");
     }
 
@@ -62,19 +96,25 @@ public partial class MainWindow : Window
     private string? _promptedRoot;
     private bool _editing;
     private bool _syncing;
+    private int _progressFailures;
     private ObservableCollection<EditItem> _editItems = new();
 
     public MainWindow()
     {
         InitializeComponent();
+        RestoreWindowPlacement();
 
         BrowseButton.Click += (_, _) => PickFolder();
         RefreshButton.Click += (_, _) => LoadProject(_root);
-        NewWorkspaceButton.Click += (_, _) => PromptWorkspace(_root, force: true);
-        NewSceneButton.Click += (_, _) => PromptWorkspace(_root, force: true);
+        NewWorkspaceButton.Click += (_, _) => NewSceneInCurrentProject();
+        NewSceneButton.Click += (_, _) => NewSceneInCurrentProject();
         CaptureWindowsButton.Click += async (_, _) => await CaptureFromWindowsAsync();
         DeleteSceneButton.Click += (_, _) => DeleteScene();
         SceneList.SelectionChanged += (_, _) => ShowScene();
+        SceneList.MouseDoubleClick += async (_, _) =>
+        {
+            if (!_editing && SceneList.SelectedIndex >= 0) await RunAsync("apply");
+        };
 
         ApplyButton.Click += async (_, _) => await RunAsync("apply");
         CaptureButton.Click += async (_, _) => await RunAsync("capture");
@@ -101,8 +141,135 @@ public partial class MainWindow : Window
         _tray.ExitRequested += ExitApp;
         _tray.SceneRequested += index => _ = ApplySceneAsync(index);
 
-        LoadProject(Directory.GetCurrentDirectory());
-        StatusText.Text += $" · 完整性 {WindowScanner.IntegrityLevel()}";
+        MenuCloseToTray.IsChecked = _settings.CloseToTray;
+
+        string? last = App.StartupProject ?? RecentProjects.Load().FirstOrDefault(Directory.Exists);
+        if (last is not null)
+        {
+            LoadProject(last, promptIfMissing: false);
+        }
+        else
+        {
+            string cwd = Directory.GetCurrentDirectory();
+            if (ConfigStore.Exists(cwd)) LoadProject(cwd, promptIfMissing: false);
+        }
+
+        UpdateWelcome();
+    }
+
+    // ---------------- 菜单与快捷键 ----------------
+
+    private void MenuOpenProject_Click(object sender, RoutedEventArgs e) => PickFolder();
+    private void MenuNewWorkspace_Click(object sender, RoutedEventArgs e) => PickWorkspaceFolder();
+    private void MenuNewScene_Click(object sender, RoutedEventArgs e) => NewSceneInCurrentProject();
+    private void MenuExit_Click(object sender, RoutedEventArgs e) => ExitApp();
+
+    private void MenuApplyScene_Click(object sender, RoutedEventArgs e) => _ = RunAsync("apply");
+    private void MenuCapture_Click(object sender, RoutedEventArgs e) => _ = RunAsync("capture");
+    private void MenuCloseScene_Click(object sender, RoutedEventArgs e) => _ = RunAsync("close");
+
+    private void MenuEditScene_Click(object sender, RoutedEventArgs e)
+    {
+        if (_editing) ExitEdit();
+        else StartEdit();
+    }
+
+    private void MenuCaptureWindows_Click(object sender, RoutedEventArgs e) =>
+        _ = CaptureFromWindowsAsync();
+
+    private void MenuDeleteScene_Click(object sender, RoutedEventArgs e) => DeleteScene();
+
+    private void MenuOpenProjectFolder_Click(object sender, RoutedEventArgs e)
+    {
+        if (_root is null)
+        {
+            Log("先选择项目");
+            return;
+        }
+        OpenPath(_root);
+    }
+
+    private void MenuOpenConfigFolder_Click(object sender, RoutedEventArgs e)
+    {
+        if (_root is null)
+        {
+            Log("先选择项目");
+            return;
+        }
+
+        string dir = Path.Combine(_root, ConfigStore.DirName);
+        if (!Directory.Exists(dir))
+        {
+            Log("这个项目还没有配置文件");
+            return;
+        }
+        OpenPath(dir);
+    }
+
+    private void MenuCloseToTray_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.CloseToTray = MenuCloseToTray.IsChecked;
+        _settings.ClosePromptShown = true;
+        SettingsStore.Save(_settings);
+        Log(MenuCloseToTray.IsChecked ? "关闭窗口时将最小化到托盘" : "关闭窗口时将退出程序");
+    }
+
+    private void MenuEnvironmentCheck_Click(object sender, RoutedEventArgs e)
+    {
+        var report = new StringBuilder();
+        report.AppendLine($"完整性级别: {WindowScanner.IntegrityLevel()}");
+        report.AppendLine($"配置文件: {(_root is null ? "（未选择项目）" : ConfigStore.ConfigPath(_root))}");
+        report.AppendLine();
+        foreach (MonitorInfo screen in Native.Screens())
+            report.AppendLine($"{screen.DeviceKey}{(screen.Primary ? "（主屏）" : "")} 工作区 {screen.WorkArea}");
+
+        string text = report.ToString().TrimEnd();
+        Log(text);
+        MessageBox.Show(this, text, "环境检查", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private void MenuReadme_Click(object sender, RoutedEventArgs e) => OpenUrl(GitHubUrl + "#readme");
+    private void MenuGitHub_Click(object sender, RoutedEventArgs e) => OpenUrl(GitHubUrl);
+
+    private void MenuAbout_Click(object sender, RoutedEventArgs e)
+    {
+        string version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.2.0";
+        MessageBox.Show(
+            this,
+            $"Setpiece {version}\n\n" +
+            "按项目保存工作现场：文件、窗口位置和显示器布局，一键恢复。\n\n" +
+            GitHubUrl,
+            "关于 Setpiece",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+    }
+
+    private void WelcomeOpen_Click(object sender, RoutedEventArgs e) => PickFolder();
+    private void WelcomeNew_Click(object sender, RoutedEventArgs e) => PickWorkspaceFolder();
+
+    protected override void OnPreviewKeyDown(KeyEventArgs e)
+    {
+        bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+        if (ctrl && e.Key == Key.O) PickFolder();
+        else if (ctrl && e.Key == Key.N) PickWorkspaceFolder();
+        else if (ctrl && e.Key == Key.S)
+        {
+            if (_editing) SaveEdit();
+            else _ = RunAsync("capture");
+        }
+        else if (ctrl && e.Key == Key.E)
+        {
+            if (_editing) ExitEdit();
+            else StartEdit();
+        }
+        else if (e.Key == Key.F5) _ = RunAsync("apply");
+        else
+        {
+            base.OnPreviewKeyDown(e);
+            return;
+        }
+
+        e.Handled = true;
     }
 
     // ---------------- 托盘与全局热键 ----------------
@@ -112,6 +279,7 @@ public partial class MainWindow : Window
         base.OnSourceInitialized(e);
         _source = (HwndSource)PresentationSource.FromVisual(this)!;
         _source.AddHook(WndProc);
+        WindowScanner.UseDarkTitleBar(_source.Handle);
 
         RegisterHotKey(_source.Handle, 1, ModControl | ModAlt | ModNoRepeat, VkKeyW);
         for (uint i = 0; i < 9; i++)
@@ -164,10 +332,39 @@ public partial class MainWindow : Window
     {
         if (!_exiting)
         {
-            e.Cancel = true;
-            HideToTray();
-            return;
+            if (!_settings.ClosePromptShown)
+            {
+                MessageBoxResult choice = MessageBox.Show(
+                    this,
+                    "关闭窗口时要最小化到托盘继续运行吗？\n\n" +
+                    "是：最小化到托盘，全局热键继续可用\n" +
+                    "否：退出 Setpiece\n" +
+                    "取消：不关闭",
+                    "Setpiece",
+                    MessageBoxButton.YesNoCancel,
+                    MessageBoxImage.Question);
+
+                if (choice == MessageBoxResult.Cancel)
+                {
+                    e.Cancel = true;
+                    return;
+                }
+
+                _settings.CloseToTray = choice == MessageBoxResult.Yes;
+                _settings.ClosePromptShown = true;
+                SettingsStore.Save(_settings);
+                MenuCloseToTray.IsChecked = _settings.CloseToTray;
+            }
+
+            if (_settings.CloseToTray)
+            {
+                e.Cancel = true;
+                HideToTray();
+                return;
+            }
         }
+
+        SaveWindowPlacement();
 
         if (_source is not null)
         {
@@ -179,6 +376,45 @@ public partial class MainWindow : Window
         base.OnClosing(e);
     }
 
+    private void RestoreWindowPlacement()
+    {
+        if (_settings.WindowWidth is >= 860 and <= 6000) Width = _settings.WindowWidth.Value;
+        if (_settings.WindowHeight is >= 620 and <= 4000) Height = _settings.WindowHeight.Value;
+
+        if (_settings.WindowLeft is double left && _settings.WindowTop is double top)
+        {
+            double vl = SystemParameters.VirtualScreenLeft;
+            double vt = SystemParameters.VirtualScreenTop;
+            double vw = SystemParameters.VirtualScreenWidth;
+            double vh = SystemParameters.VirtualScreenHeight;
+
+            // 上次的位置可能来自已经拔掉的显示器；只恢复标题栏仍可见的坐标。
+            if (left + 200 > vl && left < vl + vw - 200 &&
+                top + 80 > vt && top < vt + vh - 120)
+            {
+                WindowStartupLocation = WindowStartupLocation.Manual;
+                Left = left;
+                Top = top;
+            }
+        }
+
+        if (_settings.WindowMaximized) WindowState = WindowState.Maximized;
+    }
+
+    private void SaveWindowPlacement()
+    {
+        System.Windows.Rect bounds = WindowState == WindowState.Normal
+            ? new System.Windows.Rect(Left, Top, Width, Height)
+            : RestoreBounds;
+
+        _settings.WindowLeft = bounds.Left;
+        _settings.WindowTop = bounds.Top;
+        _settings.WindowWidth = bounds.Width;
+        _settings.WindowHeight = bounds.Height;
+        _settings.WindowMaximized = WindowState == WindowState.Maximized;
+        SettingsStore.Save(_settings);
+    }
+
     // ---------------- 项目与场景 ----------------
 
     private void PickFolder()
@@ -187,7 +423,26 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog(this) == true) LoadProject(dialog.FolderName);
     }
 
-    private void LoadProject(string? root)
+    private void PickWorkspaceFolder()
+    {
+        var dialog = new OpenFolderDialog { Title = "选择项目根目录" };
+        if (dialog.ShowDialog(this) != true) return;
+
+        LoadProject(dialog.FolderName, promptIfMissing: false);
+        PromptWorkspace(dialog.FolderName, force: true);
+    }
+
+    private void NewSceneInCurrentProject()
+    {
+        if (_root is null || _config is null)
+        {
+            PickFolder();
+            return;
+        }
+        PromptWorkspace(_root, force: true);
+    }
+
+    private void LoadProject(string? root, bool promptIfMissing = true)
     {
         if (string.IsNullOrWhiteSpace(root)) return;
         _root = root;
@@ -200,23 +455,138 @@ public partial class MainWindow : Window
             SceneList.ItemsSource = _config.Scenes
                 .Select(s => $"{s.Name}   ({s.Items.Count} 个文件)")
                 .ToList();
-            if (_config.Scenes.Count > 0) SceneList.SelectedIndex = 0;
+            if (_config.Scenes.Count > 0)
+            {
+                SceneList.SelectedIndex = 0;
+            }
+            else
+            {
+                SceneTitle.Text = "还没有场景";
+                SceneMeta.Text = "点左侧「新建」创建第一个场景，或从当前窗口生成";
+            }
+
             _tray.RebuildMenu(_config.Scenes.Select(s => s.Name).ToList());
-            StatusText.Text = $"已加载 {_config.Scenes.Count} 个场景";
+            RecentProjects.Add(root);
+            _promptedRoot = null;
+            _pendingRoot = null;
+            Title = $"Setpiece — {DisplayName(root)}";
+            SceneHeader.Text = $"场景（{_config.Scenes.Count}）";
+            if (_config.Scenes.Count == 0) SceneFiles.ItemsSource = null;
+            RefreshRecentMenus();
+            UpdateWelcome();
+            StatusText.Text = $"已加载 {_config.Scenes.Count} 个场景 · 完整性 {WindowScanner.IntegrityLevel()}";
         }
         catch (Exception ex)
         {
             _config = null;
             SceneList.ItemsSource = null;
+            SceneFiles.ItemsSource = null;
             _tray.RebuildMenu(null);
+            Title = "Setpiece";
+            SceneHeader.Text = "场景";
             SceneTitle.Text = "没有可用场景";
             SceneMeta.Text = "";
             Log($"无法加载配置: {ex.Message}");
             StatusText.Text = "这个项目还没有 Setpiece 配置";
-            _pendingRoot = root;
-
-            if (IsVisible) PromptWorkspace(root);
+            if (promptIfMissing && IsVisible)
+            {
+                _pendingRoot = root;
+                PromptWorkspace(root);
+            }
+            UpdateWelcome();
         }
+    }
+
+    private void UpdateWelcome()
+    {
+        bool hasProject = _config is not null;
+        WelcomePanel.Visibility = hasProject ? Visibility.Collapsed : Visibility.Visible;
+        MainContent.Visibility = hasProject ? Visibility.Visible : Visibility.Collapsed;
+        ProjectBar.Visibility = hasProject ? Visibility.Visible : Visibility.Collapsed;
+
+        if (!hasProject)
+        {
+            Title = "Setpiece";
+            SceneHeader.Text = "场景";
+            SceneFiles.ItemsSource = null;
+            RefreshRecentMenus();
+            StatusText.Text = $"未打开项目 · 完整性 {WindowScanner.IntegrityLevel()}";
+        }
+    }
+
+    private void RefreshRecentMenus()
+    {
+        List<string> items = RecentProjects.Load().Where(Directory.Exists).ToList();
+
+        MenuRecent.Items.Clear();
+        if (items.Count == 0)
+        {
+            MenuRecent.Items.Add(new MenuItem { Header = "（暂无）", IsEnabled = false });
+        }
+        else
+        {
+            foreach (string path in items)
+            {
+                var item = new MenuItem
+                {
+                    Header = DisplayName(path),
+                    ToolTip = path,
+                    Tag = path,
+                };
+                item.Click += (_, _) => LoadProject(path);
+                MenuRecent.Items.Add(item);
+            }
+        }
+
+        RecentList.Children.Clear();
+        if (items.Count == 0)
+        {
+            RecentList.Children.Add(new TextBlock
+            {
+                Text = "还没有打开过项目",
+                Foreground = new SolidColorBrush(Color.FromRgb(0x6F, 0x6F, 0x79)),
+                Margin = new Thickness(10, 8, 0, 8),
+                FontSize = 12,
+            });
+            return;
+        }
+
+        var style = (Style)FindResource("RecentItem");
+        foreach (string path in items)
+        {
+            var text = new StackPanel();
+            text.Children.Add(new TextBlock
+            {
+                Text = DisplayName(path),
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(0xE8, 0xE8, 0xEA)),
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            });
+            text.Children.Add(new TextBlock
+            {
+                Text = path,
+                FontSize = 11,
+                Foreground = new SolidColorBrush(Color.FromRgb(0x8A, 0x8A, 0x94)),
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            });
+
+            var button = new Button
+            {
+                Content = text,
+                Style = style,
+                Tag = path,
+                ToolTip = path,
+            };
+            button.Click += (_, _) => LoadProject(path);
+            RecentList.Children.Add(button);
+        }
+    }
+
+    private static string DisplayName(string path)
+    {
+        string trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string name = Path.GetFileName(trimmed);
+        return name.Length > 0 ? name : path;
     }
 
     protected override void OnContentRendered(EventArgs e)
@@ -340,25 +710,56 @@ public partial class MainWindow : Window
     private void ShowScene()
     {
         if (_editing) return;
+        ProgressPanel.Visibility = Visibility.Collapsed;
         if (_config is null || SceneList.SelectedIndex < 0) return;
 
         Scene scene = _config.Scenes[SceneList.SelectedIndex];
         SceneTitle.Text = scene.Name;
         int disabled = scene.Items.Count(i => i.AutoOpen == false);
-        SceneMeta.Text = $"{scene.Items.Count} 个文件 · 模板 {scene.Template} · 显示器 {scene.Monitor}" +
+        SceneMeta.Text = $"{scene.Items.Count} 个文件 · 模板 {TemplateLabel(scene.Template)} · " +
+                         $"显示器 {MonitorLabel(scene.Monitor)}" +
                          (disabled > 0 ? $" · {disabled} 个未启用" : "");
-        LogBox.Text = string.Join(Environment.NewLine,
-            scene.Items.Select(i => $"{i.File}   [{(i.Adapter ?? "auto")}]" +
-                                    (i.AutoOpen == false ? "   [未启用]" : "")));
+        SceneFiles.ItemsSource = scene.Items.Select(i => new SceneFileRow
+        {
+            File = i.File,
+            Adapter = AdapterLabel(i.Adapter),
+            Monitor = i.Monitor is null ? "跟随场景" : MonitorLabel(i.Monitor),
+            AutoOpen = i.AutoOpen == false ? "否" : "是",
+        }).ToList();
     }
+
+    private static string TemplateLabel(string? key) =>
+        FindChoice(TemplateChoices, key)?.Label ?? key ?? "自动";
+
+    private static string AdapterLabel(string? key) =>
+        string.IsNullOrEmpty(key) ? "自动" : FindChoice(AdapterChoices, key)?.Label ?? key;
+
+    private static string MonitorLabel(string? key)
+    {
+        if (string.IsNullOrEmpty(key) || key == "primary") return "主显示器";
+        return key;
+    }
+
+    private static Choice? FindChoice(IEnumerable<Choice> choices, string? key) =>
+        choices.FirstOrDefault(c => string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase));
 
     // ---------------- 编辑器 ----------------
 
-    private List<string> MonitorOptions() =>
-        new[] { "primary" }.Concat(Native.Screens().Select(s => s.DeviceKey)).ToList();
+    private List<Choice> MonitorChoices()
+    {
+        var list = new List<Choice> { new("primary", "主显示器") };
+        foreach (MonitorInfo screen in Native.Screens())
+            list.Add(new Choice(screen.DeviceKey,
+                screen.Primary ? $"{screen.DeviceKey}（主屏）" : screen.DeviceKey));
+        return list;
+    }
 
-    private List<string> ItemMonitorOptions() =>
-        new[] { InheritMonitor }.Concat(Native.Screens().Select(s => s.DeviceKey)).ToList();
+    private List<Choice> ItemMonitorChoices()
+    {
+        var list = new List<Choice> { new("", InheritMonitor) };
+        list.AddRange(MonitorChoices());
+        return list;
+    }
 
     private void StartEdit()
     {
@@ -372,12 +773,14 @@ public partial class MainWindow : Window
         _editing = true;
 
         EditName.Text = scene.Name;
-        EditTemplate.ItemsSource = Templates;
-        EditTemplate.SelectedItem = Templates.Contains(scene.Template) ? scene.Template : "auto";
 
-        List<string> monitors = MonitorOptions();
+        List<Choice> templates = TemplateChoices.ToList();
+        EditTemplate.ItemsSource = templates;
+        EditTemplate.SelectedItem = FindChoice(templates, scene.Template) ?? templates[0];
+
+        List<Choice> monitors = MonitorChoices();
         EditMonitor.ItemsSource = monitors;
-        EditMonitor.SelectedItem = monitors.Contains(scene.Monitor) ? scene.Monitor : "primary";
+        EditMonitor.SelectedItem = FindChoice(monitors, scene.Monitor) ?? monitors[0];
 
         _editItems = new ObservableCollection<EditItem>(scene.Items.Select(i => new EditItem
         {
@@ -391,13 +794,17 @@ public partial class MainWindow : Window
         EditItems.ItemsSource = _editItems;
         EditItems.SelectedIndex = _editItems.Count > 0 ? 0 : -1;
 
-        EditAdapter.ItemsSource = Adapters;
-        EditAdapter.SelectedItem = "auto";
+        List<Choice> adapters = AdapterChoices.ToList();
+        EditAdapter.ItemsSource = adapters;
+        EditAdapter.SelectedItem = adapters[0];
 
-        EditItemMonitor.ItemsSource = ItemMonitorOptions();
-        EditItemMonitor.SelectedItem = InheritMonitor;
+        List<Choice> itemMonitors = ItemMonitorChoices();
+        EditItemMonitor.ItemsSource = itemMonitors;
+        EditItemMonitor.SelectedItem = itemMonitors[0];
 
         RunPanel.Visibility = Visibility.Collapsed;
+        SceneFilesPanel.Visibility = Visibility.Collapsed;
+        LogBox.Visibility = Visibility.Collapsed;
         EditPanel.Visibility = Visibility.Visible;
         EditToggle.Content = "退出编辑";
         SceneMeta.Text = "布局由模板决定；手动摆好后回到运行页点“保存当前位置”";
@@ -407,6 +814,8 @@ public partial class MainWindow : Window
     {
         _editing = false;
         RunPanel.Visibility = Visibility.Visible;
+        SceneFilesPanel.Visibility = Visibility.Visible;
+        LogBox.Visibility = Visibility.Visible;
         EditPanel.Visibility = Visibility.Collapsed;
         EditToggle.Content = "编辑场景";
         ShowScene();
@@ -454,8 +863,10 @@ public partial class MainWindow : Window
         if (EditItems.SelectedItem is not EditItem item) return;
 
         _syncing = true;
-        EditAdapter.SelectedItem = item.Adapter ?? "auto";
-        EditItemMonitor.SelectedItem = item.Monitor ?? InheritMonitor;
+        EditAdapter.SelectedItem = FindChoice(AdapterChoices, item.Adapter) ?? AdapterChoices[0];
+
+        var monitors = EditItemMonitor.ItemsSource as List<Choice> ?? ItemMonitorChoices();
+        EditItemMonitor.SelectedItem = FindChoice(monitors, item.Monitor) ?? monitors[0];
         EditAutoOpen.IsChecked = item.AutoOpen != false;
         _syncing = false;
     }
@@ -465,11 +876,11 @@ public partial class MainWindow : Window
         if (_syncing) return;
         if (EditItems.SelectedItem is not EditItem item) return;
 
-        string adapter = EditAdapter.SelectedItem as string ?? "auto";
-        item.Adapter = adapter == "auto" ? null : adapter;
+        string? adapter = (EditAdapter.SelectedItem as Choice)?.Key;
+        item.Adapter = string.IsNullOrEmpty(adapter) || adapter == "auto" ? null : adapter;
 
-        string monitor = EditItemMonitor.SelectedItem as string ?? InheritMonitor;
-        item.Monitor = monitor == InheritMonitor ? null : monitor;
+        string? monitor = (EditItemMonitor.SelectedItem as Choice)?.Key;
+        item.Monitor = string.IsNullOrEmpty(monitor) ? null : monitor;
 
         item.AutoOpen = EditAutoOpen.IsChecked == true ? null : false;
 
@@ -507,8 +918,8 @@ public partial class MainWindow : Window
 
         Scene scene = _config.Scenes[SceneList.SelectedIndex];
         scene.Name = name;
-        scene.Template = EditTemplate.SelectedItem as string ?? "auto";
-        scene.Monitor = EditMonitor.SelectedItem as string ?? "primary";
+        scene.Template = (EditTemplate.SelectedItem as Choice)?.Key ?? "auto";
+        scene.Monitor = (EditMonitor.SelectedItem as Choice)?.Key ?? "primary";
         scene.Items = _editItems.Select(e => new SceneItem
         {
             File = e.File,
@@ -572,13 +983,20 @@ public partial class MainWindow : Window
         bool wasHidden = !IsVisible;
 
         SetBusy(true);
+        if (action == "apply") ShowProgress();
+        else ProgressPanel.Visibility = Visibility.Collapsed;
+
         int disabled = 0;
         var (code, output) = await Task.Run(() => ExecuteOnSta(() =>
         {
             Runtime.Configure(config);
             return action switch
             {
-                "apply" => SceneRunner.Apply(root, config, scene.Name, null, false, 25000),
+                "apply" => SceneRunner.Apply(root, config, scene.Name, null, false, 25000, p =>
+                {
+                    if (Dispatcher.HasShutdownStarted) return;
+                    Dispatcher.BeginInvoke(new Action(() => UpdateProgress(p)));
+                }),
                 "capture" => SceneRunner.Capture(root, config, scene.Name, out disabled),
                 "close" => SceneRunner.Close(root, config, scene.Name),
                 _ => 2,
@@ -640,7 +1058,63 @@ public partial class MainWindow : Window
         BrowseButton.IsEnabled = !busy;
         RefreshButton.IsEnabled = !busy;
         EditToggle.IsEnabled = !busy;
+        SceneList.IsEnabled = !busy;
+        NewSceneButton.IsEnabled = !busy;
+        CaptureWindowsButton.IsEnabled = !busy;
+        DeleteSceneButton.IsEnabled = !busy;
         if (busy) StatusText.Text = "运行中…";
+    }
+
+    private void ShowProgress()
+    {
+        _progressFailures = 0;
+        ProgressPanel.Visibility = Visibility.Visible;
+        RunProgress.Maximum = 1;
+        RunProgress.Value = 0;
+        ProgressText.Foreground = new SolidColorBrush(Color.FromRgb(0x9A, 0x9A, 0xA3));
+        ProgressText.Text = "正在准备打开…";
+    }
+
+    private void UpdateProgress(ApplyProgress p)
+    {
+        if (p.Phase == "跳过") return;
+
+        RunProgress.Maximum = Math.Max(1, p.Total);
+        RunProgress.Value = Math.Min(p.Completed, p.Total);
+
+        if (p.Ok == false)
+        {
+            _progressFailures++;
+            Log($"{p.File} 打开失败：{p.Note ?? "未知原因"}");
+        }
+
+        if (p.Phase == "结束")
+        {
+            RunProgress.Value = p.Total;
+            int okCount = Math.Max(0, p.Total - _progressFailures);
+            ProgressText.Foreground = _progressFailures == 0
+                ? new SolidColorBrush(Color.FromRgb(0x7A, 0xC7, 0x7A))
+                : new SolidColorBrush(Color.FromRgb(0xE0, 0xA0, 0x50));
+            ProgressText.Text = p.Total == 0
+                ? "没有需要打开的文件（都已禁用）"
+                : _progressFailures == 0
+                    ? $"已打开 {okCount} 个文件"
+                    : $"完成：{okCount} 个成功，{_progressFailures} 个失败（详见下方日志）";
+            return;
+        }
+
+        ProgressText.Foreground = new SolidColorBrush(Color.FromRgb(0x9A, 0x9A, 0xA3));
+        string name = p.File.Length > 0 ? Path.GetFileName(p.File) : "";
+        string detail = p.Note is { Length: > 0 } ? $" — {p.Note}" : "";
+
+        ProgressText.Text = p.Phase switch
+        {
+            "准备" => $"正在准备打开 {p.Total} 个文件…",
+            "等待窗口" => $"正在等待窗口（{Math.Min(p.Completed + 1, p.Total)}/{p.Total}）：{name}{detail}",
+            "完成" => $"已打开 {p.Completed}/{p.Total} · {name}",
+            "校正" => "正在校正窗口位置…",
+            _ => $"正在打开 {p.Completed}/{p.Total} · {p.Phase}：{name}{detail}",
+        };
     }
 
     private void Log(string text)
@@ -648,5 +1122,29 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(text)) return;
         LogBox.AppendText(text + Environment.NewLine);
         LogBox.ScrollToEnd();
+    }
+
+    private static void OpenUrl(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch
+        {
+            // 没有默认浏览器时静默失败，不打断主流程。
+        }
+    }
+
+    private static void OpenPath(string path)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+        }
+        catch
+        {
+            // 路径打不开时静默失败，日志由调用方负责。
+        }
     }
 }

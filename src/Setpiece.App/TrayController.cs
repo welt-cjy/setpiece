@@ -15,13 +15,28 @@ internal sealed class TrayController : IDisposable
     {
         _icon = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = LoadIcon(),
             Text = "Setpiece",
             Visible = true,
             ContextMenuStrip = new ContextMenuStrip(),
         };
         _icon.DoubleClick += (_, _) => ShowRequested?.Invoke();
         RebuildMenu(null);
+    }
+
+    private static Icon LoadIcon()
+    {
+        try
+        {
+            var resource = System.Windows.Application.GetResourceStream(
+                new Uri("pack://application:,,,/app.ico"));
+            if (resource?.Stream is not null) return new Icon(resource.Stream);
+        }
+        catch
+        {
+            // 资源缺失时退回系统图标。
+        }
+        return SystemIcons.Application;
     }
 
     public void RebuildMenu(IReadOnlyList<string>? scenes)

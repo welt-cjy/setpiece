@@ -85,6 +85,7 @@ internal static class AdapterFactory
 internal sealed class ExcelAdapter : IAppAdapter
 {
     private static readonly List<object> Owned = new();
+    private static readonly object OwnedGate = new();
 
     public string Id => "excel";
 
@@ -101,7 +102,7 @@ internal sealed class ExcelAdapter : IAppAdapter
         Type? type = Type.GetTypeFromProgID("Excel.Application")
                      ?? throw new InvalidOperationException("Excel.Application 未注册");
         dynamic app = Activator.CreateInstance(type)!;
-        Owned.Add(app);
+        lock (OwnedGate) Owned.Add(app);
         app.Visible = true;
         app.DisplayAlerts = false;
         app.Workbooks.Open(file);

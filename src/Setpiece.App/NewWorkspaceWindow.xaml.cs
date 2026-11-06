@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Windows;
+using System.Windows.Interop;
 using System.Windows.Threading;
 
 namespace Setpiece.App;
@@ -63,6 +64,13 @@ public partial class NewWorkspaceWindow : Window
     private WorkspaceNode? _rootNode;
 
     public string CreatedSceneName { get; private set; } = "";
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        if (PresentationSource.FromVisual(this) is HwndSource source)
+            WindowScanner.UseDarkTitleBar(source.Handle);
+    }
 
     internal NewWorkspaceWindow(string root, SetpieceConfig? existing = null)
     {

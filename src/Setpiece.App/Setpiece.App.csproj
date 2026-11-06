@@ -9,14 +9,30 @@
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>Setpiece.App</AssemblyName>
     <RootNamespace>Setpiece.App</RootNamespace>
-    <Version>0.2.0</Version>
+    <Version>0.3.2</Version>
+    <FileVersion>0.3.2.0</FileVersion>
+    <AssemblyVersion>0.3.2.0</AssemblyVersion>
     <Product>Setpiece</Product>
     <AssemblyTitle>Setpiece</AssemblyTitle>
+    <Company>Setpiece</Company>
+    <Copyright>© 2026 Setpiece</Copyright>
     <Description>Project-scoped window scenes for Windows</Description>
+    <ApplicationIcon>app.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- WPF 用 manifest 配置 PerMonitorV2；WinForms 只用于托盘图标 -->
     <NoWarn>$(NoWarn);WFAC010</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- WinForms 只用于托盘；去掉全局 using，避免 Button/Color/MessageBox 与 WPF 类型冲突 -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="app.ico" />
+    <Resource Include="app-logo.png" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Setpiece.Core\Setpiece.Core.csproj" />

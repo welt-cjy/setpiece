@@ -1,5 +1,5 @@
 #define AppName "Setpiece"
-#define AppVersion "0.2.0"
+#define AppVersion "0.3.2"
 #define SourceDir "..\dist\payload-loose"
 
 [Setup]
@@ -7,7 +7,10 @@ AppId={{7C3E2B8A-5F4D-4A2E-9C1B-3D6E8F0A2B4C}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher=Setpiece
-AppPublisherURL=https://github.com/
+AppPublisherURL=https://github.com/welt-cjy/setpiece
+AppSupportURL=https://github.com/welt-cjy/setpiece/issues
+AppUpdatesURL=https://github.com/welt-cjy/setpiece/releases
+SetupIconFile=..\src\Setpiece.App\app.ico
 DefaultDirName={localappdata}\Programs\Setpiece
 DefaultGroupName=Setpiece
 DisableProgramGroupPage=yes

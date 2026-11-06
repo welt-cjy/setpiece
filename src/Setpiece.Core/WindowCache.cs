@@ -20,6 +20,7 @@ internal sealed class WindowCache
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
     private readonly Dictionary<string, Entry> _map = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _gate = new();
 
     private static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -44,40 +45,43 @@ internal sealed class WindowCache
 
     public WindowInfo? TryGet(string file)
     {
-        if (!_map.TryGetValue(file, out Entry? entry)) return null;
-
-        var hwnd = new IntPtr(entry.Hwnd);
-        if (!Native.IsWindow(hwnd)) return null;
-
-        Native.GetWindowThreadProcessId(hwnd, out uint pid);
-        if ((int)pid != entry.Pid) return null;
-
-        try
+        lock (_gate)
         {
-            using Process process = Process.GetProcessById(entry.Pid);
-            if (process.HasExited) return null;
-            if (entry.Started != 0 && process.StartTime.ToUniversalTime().Ticks != entry.Started) return null;
+            if (!_map.TryGetValue(file, out Entry? entry)) return null;
+
+            var hwnd = new IntPtr(entry.Hwnd);
+            if (!Native.IsWindow(hwnd)) return null;
+
+            Native.GetWindowThreadProcessId(hwnd, out uint pid);
+            if ((int)pid != entry.Pid) return null;
+
+            try
+            {
+                using Process process = Process.GetProcessById(entry.Pid);
+                if (process.HasExited) return null;
+                if (entry.Started != 0 && process.StartTime.ToUniversalTime().Ticks != entry.Started) return null;
+            }
+            catch
+            {
+                return null;
+            }
+
+            string exe = WindowScanner.ExePathOf(entry.Pid);
+            if (entry.Exe.Length > 0 &&
+                !string.Equals(Path.GetFileName(exe), Path.GetFileName(entry.Exe), StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            var title = new StringBuilder(512);
+            Native.GetWindowText(hwnd, title, title.Capacity);
+
+            return new WindowInfo
+            {
+                Handle = hwnd,
+                Pid = entry.Pid,
+                Title = title.ToString(),
+                Exe = exe,
+            };
         }
-        catch
-        {
-            return null;
-        }
-
-        string exe = WindowScanner.ExePathOf(entry.Pid);
-        if (entry.Exe.Length > 0 &&
-            !string.Equals(Path.GetFileName(exe), Path.GetFileName(entry.Exe), StringComparison.OrdinalIgnoreCase))
-            return null;
-
-        var title = new StringBuilder(512);
-        Native.GetWindowText(hwnd, title, title.Capacity);
-
-        return new WindowInfo
-        {
-            Handle = hwnd,
-            Pid = entry.Pid,
-            Title = title.ToString(),
-            Exe = exe,
-        };
     }
 
     public void Set(string file, WindowInfo window)
@@ -93,20 +97,26 @@ internal sealed class WindowCache
             // 拿不到启动时间时不做该校验
         }
 
-        _map[file] = new Entry
+        lock (_gate)
         {
-            Hwnd = window.Handle.ToInt64(),
-            Pid = window.Pid,
-            Started = started,
-            Exe = window.Exe,
-            Title = window.Title,
-        };
-        Save();
+            _map[file] = new Entry
+            {
+                Hwnd = window.Handle.ToInt64(),
+                Pid = window.Pid,
+                Started = started,
+                Exe = window.Exe,
+                Title = window.Title,
+            };
+            Save();
+        }
     }
 
     public void Remove(string file)
     {
-        if (_map.Remove(file)) Save();
+        lock (_gate)
+        {
+            if (_map.Remove(file)) Save();
+        }
     }
 
     private void Save()

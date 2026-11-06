@@ -139,6 +139,7 @@ internal static class Native
     [DllImport("user32.dll", SetLastError = true)] public static extern bool GetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT wp);
     [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out RECT r, int size);
     [DllImport("dwmapi.dll", EntryPoint = "DwmGetWindowAttribute")] public static extern int DwmGetWindowAttributeInt(IntPtr hWnd, int attr, out int value, int size);
+    [DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hWnd, int attr, ref int value, int size);
     [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
     [DllImport("user32.dll")] private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO mi);
     [DllImport("user32.dll", EntryPoint = "GetMonitorInfoW", CharSet = CharSet.Unicode)]
@@ -249,20 +250,25 @@ internal static class WindowScanner
         return new Rect(r.Left, r.Top, r.Right, r.Bottom);
     }
 
-    public static string LastPlaceError = "";
+    [ThreadStatic] private static string? _lastPlaceError;
+    public static string LastPlaceError => _lastPlaceError ?? "";
 
     // 不依赖对边框内缩的预判：每次量出实际可见边框与目标的误差，
     // 把窗口矩形反向补偿后重设，通常 1~2 次收敛。
     public static bool Place(IntPtr hwnd, Rect targetFrame, out Rect actual)
     {
         EnsureNormal(hwnd);
-        LastPlaceError = "";
+        _lastPlaceError = "";
 
         for (int attempt = 0; attempt < 4; attempt++)
         {
             Native.GetWindowRect(hwnd, out Native.RECT w);
             actual = Frame(hwnd);
-            if (Approx(actual, targetFrame)) return true;
+            if (Approx(actual, targetFrame))
+            {
+                SyncNormalPosition(hwnd);
+                return true;
+            }
 
             int dl = actual.Left - targetFrame.Left;
             int dt = actual.Top - targetFrame.Top;
@@ -276,12 +282,28 @@ internal static class WindowScanner
 
             bool ok = Native.SetWindowPos(hwnd, IntPtr.Zero, left, top, right - left, bottom - top,
                 Native.SWP_NOZORDER | Native.SWP_NOACTIVATE);
-            LastPlaceError = $"SetWindowPos ok={ok} err={Marshal.GetLastWin32Error()}";
+            _lastPlaceError = $"SetWindowPos ok={ok} err={Marshal.GetLastWin32Error()}";
             Thread.Sleep(160);
         }
 
         actual = Frame(hwnd);
-        return Approx(actual, targetFrame);
+        bool placed = Approx(actual, targetFrame);
+        if (placed) SyncNormalPosition(hwnd);
+        return placed;
+    }
+
+    // 把当前窗口矩形写回“正常位置”缓存。VS Code 等 Electron 应用在移动/恢复时会
+    // 按这个缓存重置窗口大小，不同步的话它们会退回旧尺寸。
+    private static void SyncNormalPosition(IntPtr hwnd)
+    {
+        var wp = new Native.WINDOWPLACEMENT { length = Marshal.SizeOf<Native.WINDOWPLACEMENT>() };
+        if (!Native.GetWindowPlacement(hwnd, ref wp)) return;
+        if (wp.showCmd != 1) return;
+        if (!Native.GetWindowRect(hwnd, out Native.RECT w)) return;
+
+        wp.flags = 0;
+        wp.rcNormalPosition = w;
+        Native.SetWindowPlacement(hwnd, ref wp);
     }
 
     // Electron / Office 的还原是异步的，必须等到真正退出最小化/最大化再采样。
@@ -305,6 +327,14 @@ internal static class WindowScanner
         IntPtr h = Native.MonitorFromWindow(hwnd, Native.MONITOR_DEFAULTTONEAREST);
         var screens = Native.Screens();
         return screens.FirstOrDefault(m => m.Handle == h) ?? screens[0];
+    }
+
+    public static void UseDarkTitleBar(IntPtr hwnd)
+    {
+        int on = 1;
+        // 20 = Win10 20H1+，19 = Win10 1809+
+        if (Native.DwmSetWindowAttribute(hwnd, 20, ref on, sizeof(int)) != 0)
+            Native.DwmSetWindowAttribute(hwnd, 19, ref on, sizeof(int));
     }
 
     public static string IntegrityLevel()
